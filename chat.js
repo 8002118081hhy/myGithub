@@ -176,6 +176,8 @@ function innerAppendMessageToChatBox(nickname, fingerprint, message, fingerprint
     messageElem.appendChild(fingerprintSpan);
     messageElem.appendChild(nicknameText);
     messageElem.appendChild(document.createTextNode(message));
+    messageElem.classList.add('animate__animated');
+    messageElem.classList.add('animate__fadeInLeft');
 
     // 安全地处理换行符
     // const lines = message.split('\n');
@@ -442,6 +444,8 @@ function appendMyFingerprintToChatBox() {
 }
 
 function joinChannel(hashedChannelId) {
+    g_otherPublicKeys = {};
+    document.getElementById('chat-box').innerText = "";
     const publicKeyPem = forge.pki.publicKeyToPem(g_myPublicKey);
     g_websocket.send(JSON.stringify({
         action: 'join',

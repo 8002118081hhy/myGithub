@@ -8,30 +8,49 @@
     <link rel="stylesheet" href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/4.5.2/css/bootstrap.min.css">
     <script src="https://cdn.jsdelivr.net/npm/node-forge@1.0.0/dist/forge.min.js"></script>
     <link id="dynamic-stylesheet" rel="stylesheet" href="style_home-container.css">
+    <link rel="stylesheet" href="animate.css" />
 </head>
 
 <body>
     <!-- Main container, this will be toggled -->
-    <div class="container-fluid vh-100 p-0" id="chat-container" style="display:none;">
-        <div class="d-flex flex-column h-100 border rounded shadow-sm bg-white overflow-hidden position-relative">
-            <div id="top-bar" class="d-flex justify-content-between p-2 bg-light border-bottom">
-                <div id="channel-info"><span id="current-channel-id"></span></div>
-                <div id="status-message">正在连接...</div>
-                <button id="toggle-users-list" class="btn btn-primary btn-sm" data-toggle="modal"
-                    data-target="#usersModal">在线用户</button>
-                <button id="set-nickname-button" class="btn btn-secondary btn-sm" data-toggle="modal"
-                    data-target="#nicknameModal">设置昵称</button>
-            </div>
-            <div id="chat-box" class="flex-grow-1 p-2 overflow-auto"></div>
-            <div id="input-container" class="border-top p-2 bg-light">
-                <textarea id="input-message" class="form-control" placeholder="Enter message..." disabled></textarea>
-                <button id="upload-image-button" class="btn btn-secondary btn-sm">上传图片</button>
-                <button id="send-message-button" class="btn btn-primary btn-sm">发送</button>
-                <input type="file" id="image-input" style="display: none;" accept="image/*">
-                <div id="image-preview" style="margin-top: 10px;"></div>
+    <!-- flex布局 -->
+    <div class="chat-container" id="chat-container" style="display:none;">
+        <div class="chat-body">
+            <div class="flexed flex-column">
+                <!-- 聊天室名称 -->
+                <div id="top-bar" class="flexed flex-row title">
+                    <div id="channel-info" class="channel-info"><span id="current-channel-id"></span></div>
+                    <div id="status-message" class="status-message">正在连接...</div>
+                </div>
+                <!-- 聊天框 -->
+                <div id="chat-content" class="flexed chat-content">
+                    <div id="chat-box" class="chat-box"></div>
+                </div>
+                <!-- 输入框/按钮 -->
+                <div id="input-container" class="flexed flex-column border-top p-2 bg-light input-container">
+                    <div>
+                        <textarea id="input-message" class="form-control" style="height: 5rem;" placeholder="Enter message..." disabled></textarea>
+                    </div>
+                    <div class="flex input-buttons">
+                        <button id="upload-image-button" class="btn btn-secondary imageBtn">上传图片</button>
+                        <button id="send-message-button" class="sendBtn">发送</button>
+                        <input type="file" id="image-input" style="display: none;" accept="image/*">
+                        <div id="image-preview" style="margin-top: 10px;"></div>
+                    </div>
+                </div>
             </div>
         </div>
+        <!-- 悬浮按钮-->
+        <div class="flexed flex-column levitBtn">
+            <button id="toggle-users-list" class="" data-toggle="modal"
+                data-target="#usersModal">在线<br/>用户</button>
+            <button id="set-nickname-button" class="" data-toggle="modal"
+                data-target="#nicknameModal">设置<br/>昵称</button>
+            <button id="view-rsa-keys-button" class="btn btn-info btn-sm" onclick="displayRSAModal()">查看RSA密钥</button>
+        </div>
     </div>
+
+    
 
     <!-- Homepage container, this will be toggled -->
     <div class="container" id="home-container">
@@ -133,6 +152,29 @@
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-dismiss="modal">关闭</button>
                     <button type="button" class="btn btn-primary" id="save-nickname-button">保存</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- RSA Modal -->
+    <div class="modal fade" id="rsaKeysModal" tabindex="-1" aria-labelledby="rsaKeysModalLabel" style="display: none;" aria-hidden="true">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="rsaKeysModalLabel">查看/保存 RSA 密钥</h5>
+                    <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                        <span aria-hidden="true">×</span>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <textarea id="rsa-key-display" class="form-control" rows="8" readonly=""></textarea>
+                    <textarea id="rsa-key-input" class="form-control mt-2" rows="8" placeholder="粘贴您的私钥以加载..."></textarea>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">关闭</button>
+                    <button type="button" class="btn btn-primary" onclick="copyToClipboard()">复制密钥</button>
+                    <button type="button" class="btn btn-success" onclick="loadPrivateKey()">加载密钥</button>
                 </div>
             </div>
         </div>
