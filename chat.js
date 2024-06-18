@@ -1,4 +1,4 @@
-const g_uri = 'wss://chat.yuchu.space:8765';
+const g_uri = 'wss://ws.0f31.com:8765';
 const nonceLifeTime = 300000; // nonce的生命是5分钟
 const nonceCleanUpInterval = 60000; // 每隔1分钟清理一次nonce
 let g_websocket = null;
@@ -18,6 +18,8 @@ let g_pendingNewMembers = []; // 存储待处理的新成员公钥哈希
 let receivedNonces = new Map(); // 存储nonce和时间戳
 let g_salt1 = "https://github.com/smallzhong/E2EEGroupChat";
 let g_salt2 = "smallzhong";
+const g_MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+
 
 function loadPrivateKey() {
     try {
@@ -34,6 +36,64 @@ function loadPrivateKey() {
         alert('加载密钥失败，请确保密钥格式正确');
         console.error('Error loading private key:', error);
     }
+}
+
+document.getElementById('upload-file-button').addEventListener('click', function () {
+    document.getElementById('file-input').click();
+});
+document.getElementById('file-input').addEventListener('change', function (event) {
+    const file = event.target.files[0];
+    if (file) {
+        if (file.size > g_MAX_FILE_SIZE) {
+            alert('文件过大，请选择一个小于5MB的文件。');
+            return;
+        }
+        const reader = new FileReader();
+        reader.onload = function (e) {
+            const base64File = e.target.result;
+            const fileName = file.name;
+            appendFileToChatBox(g_myNickName, getShortHash(getPublicKeyHash(g_myPublicKey)), base64File, fileName, getColorFromSHA256(getPublicKeyHash(g_myPublicKey)));
+            innerSendFileBase64(base64File, fileName);
+        };
+        reader.readAsDataURL(file);
+    }
+});
+
+function innerSendFileBase64(base64File, fileName) {
+    const encryptedMessage = encryptMessage(JSON.stringify({ base64File: base64File, fileName: fileName, change_nickname: g_myNickName }));
+    g_websocket.send(JSON.stringify({
+        action: 'send_message', channel_id: g_hashed_channel_id, encrypted_message: encryptedMessage
+    }));
+}
+
+function appendFileToChatBox(nickname, fingerprint, base64File, fileName, fingerprintColor) {
+    if (!isValidBase64File(base64File) || !isValidFileName(fileName)) {
+        console.warn("文件验证失败！这可能是一次黑客攻击！");
+        return;
+    }
+
+    const chatBox = document.getElementById('chat-box');
+    const messageElem = document.createElement('p');
+    const nicknameText = document.createTextNode(` ${nickname}`);
+    const fingerprintSpan = document.createElement('span');
+    fingerprintSpan.textContent = fingerprint;
+    fingerprintSpan.style.color = fingerprintColor;
+    fingerprintSpan.classList.add("message-text");
+    const closingParenText = document.createTextNode(`: `);
+    messageElem.appendChild(fingerprintSpan);
+    messageElem.appendChild(nicknameText);
+    messageElem.appendChild(closingParenText);
+
+    const fileLink = document.createElement('a');
+    fileLink.href = base64File;
+    fileLink.download = fileName;
+    fileLink.textContent = fileName;
+    fileLink.style.color = '#007bff';
+    fileLink.style.textDecoration = 'underline';
+
+    messageElem.appendChild(fileLink);
+    chatBox.appendChild(messageElem);
+    chatBox.scrollTop = chatBox.scrollHeight;
 }
 
 
@@ -64,11 +124,67 @@ document.getElementById('image-input').addEventListener('change', function (even
     }
 });
 
+document.getElementById('input-message').addEventListener('paste', function (event) {
+    if (event.clipboardData && event.clipboardData.items) {
+        const items = event.clipboardData.items;
+        for (let i = 0; i < items.length; i++) {
+            if (items[i].kind === 'file') {
+                const blob = items[i].getAsFile();
+                const reader = new FileReader();
+                reader.onload = function (e) {
+                    const base64File = e.target.result;
+                    const fileName = blob.name;
+                    if (blob.type.startsWith('image/')) {
+                        if (isValidBase64Image(base64File)) {
+                            const imagePreview = document.getElementById('image-preview');
+                            imagePreview.innerHTML = `<img src="${base64File}" style="max-width:200px;">`;
+                            imagePreview.dataset.base64 = base64File;
+                            document.getElementById('input-message').focus();
+                        } else {
+                            console.warn("粘贴的不是图片格式。");
+                        }
+                    } else {
+                        if (isValidBase64File(base64File)) {
+                            const filePreview = document.getElementById('image-preview'); // 使用相同的预览区域
+                            filePreview.innerHTML = `<p>文件名: ${fileName}</p>`;
+                            filePreview.dataset.base64 = base64File;
+                            filePreview.dataset.fileName = fileName;
+                            document.getElementById('input-message').focus();
+                        } else {
+                            console.warn("粘贴的不是有效的文件格式。");
+                        }
+                    }
+                };
+                reader.readAsDataURL(blob);
+            }
+        }
+    }
+});
+
+const SLICE_SIZE = 1024 * 1024; // 1MB
+function generateUniqueId() {
+    return 'image_' + Math.random().toString(36).substr(2, 9);
+}
 function innerSendImageBase64(base64Image) {
-    const encryptedMessage = encryptMessage(JSON.stringify({ base64Image: base64Image, change_nickname: g_myNickName }));
-    g_websocket.send(JSON.stringify({
-        action: 'send_message', channel_id: g_hashed_channel_id, encrypted_message: encryptedMessage
-    }));
+    const totalSlices = Math.ceil(base64Image.length / SLICE_SIZE);
+    const imageId = generateUniqueId(); // 生成唯一的图片ID
+    for (let i = 0; i < totalSlices; i++) {
+        const slice = base64Image.slice(i * SLICE_SIZE, (i + 1) * SLICE_SIZE);
+        const encryptedMessage = encryptMessage(JSON.stringify({
+            imageData: {
+                base64Image: slice,
+                imageId: imageId,
+                sliceIndex: i,
+                totalSlices: totalSlices
+            },
+            change_nickname: g_myNickName
+        }));
+        g_websocket.send(JSON.stringify({
+            action: 'send_message',
+            channel_id: g_hashed_channel_id,
+            encrypted_message: encryptedMessage
+        }));
+    }
     // 展示自己的消息
     const myPublicKeyHash = getPublicKeyHash(g_myPublicKey);
     const myNickname = g_myNickName;
@@ -176,8 +292,6 @@ function innerAppendMessageToChatBox(nickname, fingerprint, message, fingerprint
     messageElem.appendChild(fingerprintSpan);
     messageElem.appendChild(nicknameText);
     messageElem.appendChild(document.createTextNode(message));
-    messageElem.classList.add('animate__animated');
-    messageElem.classList.add('animate__fadeInLeft');
 
     // 安全地处理换行符
     // const lines = message.split('\n');
@@ -193,18 +307,94 @@ function innerAppendMessageToChatBox(nickname, fingerprint, message, fingerprint
 }
 
 function isValidBase64Image(message) {
-    // TODO: 可以考虑支持更多格式，但是我不确定哪些格式可能引入潜在的XSS或者IP泄露风险
-    // 正则表达式，检查是否以"data:image/jpeg;base64,"开头，后跟base64编码
-    const regex = /^data:image\/(jpeg|png|gif|bmp|webp|tiff|svg\+xml|ico|heic);base64,([A-Za-z0-9+/]{4})*([A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
-
-    // 使用正则表达式测试输入的message
-    if (regex.test(message)) {
-        console.log('是正确图片base64编码');
-        return true; // 如果匹配，返回true
-    } else {
-        console.warn(`${message}可能是恶意的XSS payload！不符合base64图片规则！`);
-        return false; // 如果不匹配，返回false
+    // 先检查前缀部分
+    const prefixRegex = /^data:image\/(jpeg|png|gif|bmp|webp|tiff|svg\+xml|ico|heic);base64,/;
+    if (!prefixRegex.test(message)) {
+        console.warn(`${message} 不符合base64图片前缀规则！`);
+        return false;
     }
+
+    // 获取前缀长度
+    const prefixLength = message.match(prefixRegex)[0].length;
+
+    // 合法的Base64字符集合
+    const base64Chars = new Set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=');
+
+    // 检查其余部分是否为合法的Base64字符
+    for (let i = prefixLength; i < message.length; i++) {
+        const char = message[i];
+        if (!base64Chars.has(char)) {
+            console.warn(`${message} 可能是恶意的XSS payload！不符合base64图片内容规则！`);
+            return false;
+        }
+    }
+
+    console.log('是正确图片base64编码');
+    return true;
+}
+function showModal(imageBase64) {
+    const modal = document.createElement('div');
+    modal.style.position = 'fixed';
+    modal.style.top = '0';
+    modal.style.left = '0';
+    modal.style.width = '100%';
+    modal.style.height = '100%';
+    modal.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+    modal.style.display = 'flex';
+    modal.style.alignItems = 'center';
+    modal.style.justifyContent = 'center';
+    modal.style.zIndex = '1000';
+
+    const largeImage = document.createElement('img');
+    largeImage.src = imageBase64;
+    largeImage.style.maxWidth = '90%';
+    largeImage.style.maxHeight = '90%';
+
+    modal.appendChild(largeImage);
+
+    modal.addEventListener('click', function () {
+        document.body.removeChild(modal);
+    });
+
+    document.body.appendChild(modal);
+}
+
+function isValidBase64File(base64File) {
+    // 先检查前缀部分
+    const prefixRegex = /^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,/;
+    if (!prefixRegex.test(base64File)) {
+        console.warn(`${base64File} 不符合base64文件前缀规则！`);
+        return false;
+    }
+
+    // 获取前缀长度
+    const prefixLength = base64File.match(prefixRegex)[0].length;
+
+    // 合法的Base64字符集合
+    const base64Chars = new Set('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=');
+
+    // 检查其余部分是否为合法的Base64字符
+    for (let i = prefixLength; i < base64File.length; i++) {
+        const char = base64File[i];
+        if (!base64Chars.has(char)) {
+            console.warn(`${base64File} 可能是恶意的XSS payload！不符合base64文件内容规则！`);
+            return false;
+        }
+    }
+
+    console.log('是正确的base64文件编码');
+    return true;
+}
+
+
+function isValidFileName(fileName) {
+    const invalidChars = /[<>:"/\\|?*\x00-\x1F]/g;
+    if (invalidChars.test(fileName)) {
+        alert(`文件名${fileName}包含非法字符！`);
+        console.warn(`文件名${fileName}包含非法字符！`);
+        return false;
+    }
+    return true;
 }
 
 function appendImageToChatBox(nickname, fingerprint, imageBase64, fingerprintColor) {
@@ -226,11 +416,18 @@ function appendImageToChatBox(nickname, fingerprint, imageBase64, fingerprintCol
     messageElem.appendChild(fingerprintSpan);
     messageElem.appendChild(nicknameText);
     messageElem.appendChild(closingParenText);
+
+    const imageElem = document.createElement('img');
+    imageElem.src = imageBase64;
+    imageElem.style.maxWidth = '600px';
+    imageElem.addEventListener('click', function () {
+        showModal(imageBase64);
+    });
+
     chatBox.appendChild(messageElem);
-    chatBox.innerHTML += `<img src="${imageBase64}" style="max-width:600px;">`;
+    chatBox.appendChild(imageElem);
     chatBox.scrollTop = chatBox.scrollHeight;
 }
-
 function appendMessageToChatBox(nickname, fingerprint, message, fingerprintColor) {
     innerAppendMessageToChatBox(nickname, fingerprint, message, fingerprintColor);
 }
@@ -320,6 +517,7 @@ function handleHashChange() {
 }
 
 document.addEventListener('DOMContentLoaded', function () {
+    window.location.hash = "";
     const channelInput = document.getElementById('channel-name-input');
     const randomChannelName = generateRandomChannel();
     channelInput.value = randomChannelName;  // 填充随机频道名称
@@ -361,10 +559,21 @@ document.addEventListener('DOMContentLoaded', function () {
             const imagePreview = document.getElementById('image-preview');
             sendMessage();
             if (imagePreview.dataset.base64) {
-                console.log(imagePreview.dataset.base64);
-                innerSendImageBase64(imagePreview.dataset.base64); // 发送图片
-                imagePreview.innerHTML = ''; // 清空预览
-                delete imagePreview.dataset.base64; // 清除存储的图片数据
+                if (imagePreview.dataset.fileName) {
+                    // 发送文件
+                    console.log(imagePreview.dataset.base64, imagePreview.dataset.fileName);
+                    appendFileToChatBox(g_myNickName, getShortHash(getPublicKeyHash(g_myPublicKey)), imagePreview.dataset.base64, imagePreview.dataset.fileName, getColorFromSHA256(getPublicKeyHash(g_myPublicKey)));
+                    innerSendFileBase64(imagePreview.dataset.base64, imagePreview.dataset.fileName); // 发送文件
+                    imagePreview.innerHTML = ''; // 清空预览
+                    delete imagePreview.dataset.base64; // 清除存储的文件数据
+                    delete imagePreview.dataset.fileName; // 清除存储的文件名
+                } else {
+                    // 发送图片
+                    console.log(imagePreview.dataset.base64);
+                    innerSendImageBase64(imagePreview.dataset.base64); // 发送图片
+                    imagePreview.innerHTML = ''; // 清空预览
+                    delete imagePreview.dataset.base64; // 清除存储的图片数据
+                }
             }
         }
     });
@@ -435,7 +644,7 @@ function appendMyFingerprintToChatBox() {
     const chatBox = document.getElementById('chat-box');
     const messageElem = document.createElement('p');
     const fingerprintSpan = document.createElement('span');
-    fingerprintSpan.textContent = `我的指纹: ${fingerprint}`;
+    fingerprintSpan.textContent = `加入 ${g_real_channel_id} 成功！我的指纹: ${fingerprint}`;
     fingerprintSpan.style.color = fingerprintColor;
     fingerprintSpan.classList.add("message-text");
     messageElem.appendChild(fingerprintSpan);
@@ -445,7 +654,8 @@ function appendMyFingerprintToChatBox() {
 
 function joinChannel(hashedChannelId) {
     g_otherPublicKeys = {};
-    document.getElementById('chat-box').innerText = "";
+    // TODO: 这里要加入一条新加入消息，不能直接清空，也不能啥也不干。
+    // document.getElementById('chat-box').innerText = ""; 
     const publicKeyPem = forge.pki.publicKeyToPem(g_myPublicKey);
     g_websocket.send(JSON.stringify({
         action: 'join',
@@ -523,12 +733,8 @@ function handleIncomingMessage(data) {
             sendHeartbeat();
             break;
         case 'receive_message':
-            console.log(data);
+            //console.log(data);
             handleIncomeMessage(messageData.encrypted_message, messageData.public_key_hash);
-            if (!g_isPageFocused) {
-                g_unreadMessages++;
-                updatePageTitle();
-            }
             break;
         case 'receive_public_key':
             console.log(data);
@@ -686,7 +892,11 @@ function handleIncomeMessage(encryptedMessage, publicKeyHash) {
     }
 }
 
+let imageSlices = {};
+let imagePlaceholders = {}; // 存储图片占位符
+
 function handleIncomeMessageJsonFields(publicKeyHash, json) {
+    let isNewMessageFlag = true;
     for (const key in json) {
         if (json.hasOwnProperty(key)) {
             if (key === 'change_nickname') {
@@ -696,17 +906,111 @@ function handleIncomeMessageJsonFields(publicKeyHash, json) {
                 const fingerprint = getShortHash(publicKeyHash);
                 const fingerprintColor = getColorFromSHA256(publicKeyHash);
                 appendMessageToChatBox(nickname, fingerprint, json[key], fingerprintColor);
-            } else if (key == 'base64Image') {
+            } else if (key === 'imageData') {
+                try {
+                    const imageData = json[key];
+                    if (!imageData) {
+                        throw new Error('imageData is undefined');
+                    }
+                    const { imageId, base64Image, sliceIndex, totalSlices } = imageData;
+                    const nickname = getNickname(publicKeyHash);
+                    const fingerprint = getShortHash(publicKeyHash);
+                    const fingerprintColor = getColorFromSHA256(publicKeyHash);
+
+                    // 如果是分片传输
+                    const imageKey = `${publicKeyHash}-${imageId}`;
+                    if (!imageSlices[imageKey]) {
+                        imageSlices[imageKey] = [];
+                        createImagePlaceholder(nickname, fingerprint, fingerprintColor, imageKey, imageId);
+                    }
+                    imageSlices[imageKey][sliceIndex] = base64Image;
+
+                    // 更新占位符的进度
+                    const receivedSlices = imageSlices[imageKey].filter(slice => slice !== undefined).length;
+                    updateImagePlaceholder(nickname, fingerprint, fingerprintColor, imageKey, receivedSlices, totalSlices, imageId);
+
+                    // 如果收齐了所有分片
+                    if (receivedSlices === totalSlices) {  // 确保所有分片已收到
+                        const fullImageBase64 = imageSlices[imageKey].join('');
+                        delete imageSlices[imageKey];
+                        const placeholderElem = document.getElementById(imageKey);
+                        if (placeholderElem) {
+                            placeholderElem.remove(); // 移除占位符
+                        }
+                        appendImageToChatBox(nickname, fingerprint, fullImageBase64, fingerprintColor);
+                    } else {
+                        isNewMessageFlag = false;
+                    }
+                } catch (error) {
+                    console.error(`Error processing image slice data: ${error.message}`);
+                    isNewMessageFlag = false;
+                }
+            } else if (key === 'base64File') {
                 const nickname = getNickname(publicKeyHash);
                 const fingerprint = getShortHash(publicKeyHash);
                 const fingerprintColor = getColorFromSHA256(publicKeyHash);
-                appendImageToChatBox(nickname, fingerprint, json[key], fingerprintColor);
+                appendFileToChatBox(nickname, fingerprint, json[key], json.fileName, fingerprintColor);
             } else {
                 console.warn(`Unknown field: ${key}`);
+                // TODO: 传base64File的时候，有一些字段是会走到这里的，所以这里暂时不能false，有空把前面的封装一遍。
+                // isNewMessageFlag = false;
             }
         }
     }
+
+    if (isNewMessageFlag === true && !g_isPageFocused) {
+        g_unreadMessages++;
+        updatePageTitle();
+    }
 }
+
+function createImagePlaceholder(nickname, fingerprint, fingerprintColor, imageKey, imageId) {
+    const chatBox = document.getElementById('chat-box');
+    const messageElem = document.createElement('p');
+    messageElem.id = imageKey; // 设置占位符的id
+
+    const nicknameText = document.createTextNode(` ${nickname}`);
+    const fingerprintSpan = document.createElement('span');
+    fingerprintSpan.textContent = fingerprint;
+    fingerprintSpan.style.color = fingerprintColor;
+    fingerprintSpan.classList.add("message-text");
+    const closingParenText = document.createTextNode(`: 正在接收图片${imageId} (0%)`);
+
+    messageElem.appendChild(fingerprintSpan);
+    messageElem.appendChild(nicknameText);
+    messageElem.appendChild(closingParenText);
+
+    chatBox.appendChild(messageElem);
+    chatBox.scrollTop = chatBox.scrollHeight;
+}
+
+function updateImagePlaceholder(nickname, fingerprint, fingerprintColor, imageKey, receivedSlices, totalSlices, imageId) {
+    const placeholderElem = document.getElementById(imageKey);
+    if (placeholderElem) {
+        placeholderElem.remove(); // 移除占位符
+        const chatBox = document.getElementById('chat-box');
+        const messageElem = document.createElement('p');
+        messageElem.id = imageKey; // 设置占位符的id
+
+        const nicknameText = document.createTextNode(` ${nickname}`);
+        const fingerprintSpan = document.createElement('span');
+        fingerprintSpan.textContent = fingerprint;
+        fingerprintSpan.style.color = fingerprintColor;
+        fingerprintSpan.classList.add("message-text");
+        const progress = Math.floor((receivedSlices / totalSlices) * 100);
+
+        const closingParenText = document.createTextNode(`：正在接收图片${imageId} (${progress}%)`);
+
+        messageElem.appendChild(fingerprintSpan);
+        messageElem.appendChild(nicknameText);
+        messageElem.appendChild(closingParenText);
+
+        chatBox.appendChild(messageElem);
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
+}
+
+
 
 function verifySignature(publicKeyHash, utf8MessageBytes, signature) {
     const publicKey = g_otherPublicKeys[publicKeyHash];
